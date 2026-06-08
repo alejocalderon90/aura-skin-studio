@@ -1,0 +1,328 @@
+{
+  "meta": {
+    "instanceId": "aura-skin-studio-agent-v1"
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "webhook/agente-aura-skin",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        240
+      ],
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        240
+      ],
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.body.message }}",
+        "options": {
+          "systemMessage": "Sos el asistente virtual de Aura Skin Studio, un centro de estética y dermocosmética. Tu función es responder consultas sobre servicios, precios, disponibilidad y turnos.\n\nReglas obligatorias:\n- Respondé siempre en español rioplatense, con tono profesional, amable y claro (usa \"vos\", tildes rioplatenses como \"mirá\", \"reservá\", \"contame\").\n- No inventes servicios, precios, horarios ni disponibilidad.\n- Para servicios, consultá la tabla services.\n- Para disponibilidad, consultá la tabla appointments con status Disponible.\n- Para reservar, primero verificá que el turno siga Disponible.\n- Antes de reservar, asegurate de tener nombre completo, teléfono, servicio deseado y turno elegido.\n- Si falta información, pedila de forma simple.\n- Si el cliente pide disponibilidad, ofrecé hasta 3 opciones concretas.\n- Si el cliente confirma una opción, reservá el turno antes de decir que quedó registrado.\n- Al reservar, dejá el turno en estado Pendiente.\n- No proceses pagos.\n- No pidas datos de tarjeta.\n- No envíes links de pago.\n- Si una operación falla, explicá el problema sin inventar confirmaciones.\n- Mantené respuestas cortas, útiles y orientadas a resolver."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        380,
+        240
+      ],
+      "id": "ai-agent",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "options": {
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        260,
+        420
+      ],
+      "id": "openai-model",
+      "name": "OpenAI Chat Model"
+    },
+    {
+      "parameters": {
+        "sessionKey": "={{ $('Webhook Trigger').item.json.body.sessionId }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        400,
+        420
+      ],
+      "id": "chat-memory",
+      "name": "Window Buffer Memory"
+    },
+    {
+      "parameters": {
+        "name": "consultar_servicios",
+        "description": "Consulta el catálogo de tratamientos estéticos activos en Aura Skin Studio. Devuelve el nombre del tratamiento, descripción, duración y precio.",
+        "jsCode": "const supabaseUrl = $env.VITE_SUPABASE_URL || 'https://tu-proyecto.supabase.co';\nconst supabaseKey = $env.VITE_SUPABASE_ANON_KEY || 'tu-anon-key';\n\ntry {\n  const response = await fetch(`${supabaseUrl}/rest/v1/services?active=eq.true&select=*`, {\n    headers: {\n      \"apikey\": supabaseKey,\n      \"Authorization\": `Bearer ${supabaseKey}`\n    }\n  });\n  if (!response.ok) throw new Error(`HTTP error ${response.status}`);\n  const data = await response.json();\n  return data.map(s => ({\n    id: s.id,\n    nombre: s.name,\n    descripcion: s.description,\n    duracion: `${s.duration_minutes} min`,\n    precio: s.price\n  }));\n} catch (error) {\n  return { error: error.message };\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1,
+      "position": [
+        560,
+        420
+      ],
+      "id": "tool-consultar-servicios",
+      "name": "Tool: Consultar Servicios"
+    },
+    {
+      "parameters": {
+        "name": "consultar_disponibilidad",
+        "description": "Consulta turnos disponibles ('status' = 'Disponible') en la agenda a partir de hoy. Devuelve ID del turno, fecha, hora, servicio y profesional. Puede filtrarse opcionalmente por fecha (formato YYYY-MM-DD).",
+        "jsCode": "const supabaseUrl = $env.VITE_SUPABASE_URL || 'https://tu-proyecto.supabase.co';\nconst supabaseKey = $env.VITE_SUPABASE_ANON_KEY || 'tu-anon-key';\n\ntry {\n  const today = new Date().toISOString().split('T')[0];\n  let url = `${supabaseUrl}/rest/v1/appointments?status=eq.Disponible&appointment_date=gte.${today}&select=*,services(name),professionals(full_name)`;\n  \n  // Intentar leer argumentos opcionales pasados por el agente\n  if (typeof fecha === 'string' && fecha.match(/^\\d{4}-\\d{2}-\\d{2}$/)) {\n    url += `&appointment_date=eq.${fecha}`;\n  }\n  \n  const response = await fetch(url, {\n    headers: {\n      \"apikey\": supabaseKey,\n      \"Authorization\": `Bearer ${supabaseKey}`\n    }\n  });\n  if (!response.ok) throw new Error(`HTTP error ${response.status}`);\n  const data = await response.json();\n  \n  return data.map(d => ({\n    appointment_id: d.id,\n    fecha: d.appointment_date,\n    hora: d.appointment_time ? d.appointment_time.substring(0, 5) : '',\n    duracion: `${d.duration_minutes} min`,\n    precio: d.price,\n    tratamiento: d.services ? d.services.name : 'Tratamiento',\n    profesional: d.professionals ? d.professionals.full_name : 'Por asignar'\n  }));\n} catch (error) {\n  return { error: error.message };\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1,
+      "position": [
+        680,
+        420
+      ],
+      "id": "tool-consultar-disponibilidad",
+      "name": "Tool: Consultar Disponibilidad"
+    },
+    {
+      "parameters": {
+        "name": "reservar_turno",
+        "description": "Realiza la reserva de un turno disponible específico. Requiere los siguientes argumentos obligatorios: appointment_id (UUID del turno), customer_name (nombre del cliente), customer_phone (teléfono del cliente). Opcional: customer_email y notes.",
+        "jsCode": "const supabaseUrl = $env.VITE_SUPABASE_URL || 'https://tu-proyecto.supabase.co';\nconst supabaseKey = $env.VITE_SUPABASE_ANON_KEY || 'tu-anon-key';\n// La clave service role se usa en backend para bypass RLS y crear clientes si es necesario\nconst supabaseServiceKey = $env.SUPABASE_SERVICE_ROLE_KEY || supabaseKey;\n\n// Parámetros que el agente conversacional debe pasar a la herramienta\nconst { appointment_id, customer_name, customer_phone, customer_email, notes } = arg1 || {};\n\nif (!appointment_id || !customer_name || !customer_phone) {\n  return { error: \"Faltan argumentos requeridos: appointment_id, customer_name, customer_phone.\" };\n}\n\ntry {\n  // 1. Validar que el turno exista y esté Disponible\n  const fetchAppRes = await fetch(`${supabaseUrl}/rest/v1/appointments?id=eq.${appointment_id}&select=*,services(name)`, {\n    headers: { \"apikey\": supabaseKey, \"Authorization\": `Bearer ${supabaseKey}` }\n  });\n  const appData = await fetchAppRes.json();\n  if (!appData || appData.length === 0) return { error: \"El turno especificado no existe.\" };\n  \n  const appointment = appData[0];\n  if (appointment.status !== 'Disponible') return { error: \"Ese turno ya no está disponible. Elegí otra opción.\" };\n\n  // 2. Buscar o crear cliente por teléfono\n  const phoneSearchRes = await fetch(`${supabaseUrl}/rest/v1/clients?phone=eq.${encodeURIComponent(customer_phone.trim())}&select=*`, {\n    headers: { \"apikey\": supabaseKey, \"Authorization\": `Bearer ${supabaseKey}` }\n  });\n  const clients = await phoneSearchRes.json();\n  let client_id = null;\n  const treatmentName = appointment.services ? appointment.services.name : 'Tratamiento';\n\n  if (clients && clients.length > 0) {\n    client_id = clients[0].id;\n    const nextVisits = (clients[0].visit_count || 0) + 1;\n    // Actualizar cliente existente\n    await fetch(`${supabaseUrl}/rest/v1/clients?id=eq.${client_id}`, {\n      method: 'PATCH',\n      headers: {\n        \"apikey\": supabaseServiceKey,\n        \"Authorization\": `Bearer ${supabaseServiceKey}`,\n        \"Content-Type\": \"application/json\",\n        \"Prefer\": \"return=minimal\"\n      },\n      body: JSON.stringify({\n        visit_count: nextVisits,\n        status: 'Activo',\n        last_treatment: treatmentName\n      })\n    });\n  } else {\n    // Crear nuevo cliente\n    const newClientRes = await fetch(`${supabaseUrl}/rest/v1/clients`, {\n      method: 'POST',\n      headers: {\n        \"apikey\": supabaseServiceKey,\n        \"Authorization\": `Bearer ${supabaseServiceKey}`,\n        \"Content-Type\": \"application/json\",\n        \"Prefer\": \"return=representation\"\n      },\n      body: JSON.stringify({\n        full_name: customer_name,\n        phone: customer_phone.trim(),\n        email: customer_email || null,\n        status: 'Nuevo',\n        visit_count: 1,\n        last_treatment: treatmentName\n      })\n    });\n    const newClientData = await newClientRes.json();\n    if (newClientData && newClientData.length > 0) {\n      client_id = newClientData[0].id;\n    } else {\n      throw new Error(\"No se pudo registrar al nuevo cliente.\");\n    }\n  }\n\n  // 3. Registrar la reserva del turno cambiando estado a Pendiente\n  const patchAppRes = await fetch(`${supabaseUrl}/rest/v1/appointments?id=eq.${appointment_id}`, {\n    method: 'PATCH',\n    headers: {\n      \"apikey\": supabaseServiceKey,\n      \"Authorization\": `Bearer ${supabaseServiceKey}`,\n      \"Content-Type\": \"application/json\",\n      \"Prefer\": \"return=representation\"\n    },\n    body: JSON.stringify({\n      client_id: client_id,\n      customer_name: customer_name,\n      customer_phone: customer_phone.trim(),\n      customer_email: customer_email || null,\n      status: 'Pendiente',\n      notes: notes || null\n    })\n  });\n  const updatedApp = await patchAppRes.json();\n\n  // 4. Crear un cobro pendiente en la tabla de pagos\n  await fetch(`${supabaseUrl}/rest/v1/payments`, {\n    method: 'POST',\n    headers: {\n      \"apikey\": supabaseServiceKey,\n      \"Authorization\": `Bearer ${supabaseServiceKey}`,\n      \"Content-Type\": \"application/json\"\n    },\n    body: JSON.stringify({\n      appointment_id: appointment_id,\n      client_id: client_id,\n      concept: treatmentName,\n      amount: appointment.price,\n      status: 'Pendiente'\n    })\n  });\n\n  return {\n    success: true,\n    mensaje: \"Turno reservado con éxito. Estado: Pendiente de confirmación.\",\n    turno: {\n      id: appointment_id,\n      fecha: appointment.appointment_date,\n      hora: appointment.appointment_time ? appointment.appointment_time.substring(0, 5) : '',\n      servicio: treatmentName,\n      cliente: customer_name\n    }\n  };\n} catch (error) {\n  return { error: error.message };\n}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolCode",
+      "typeVersion": 1,
+      "position": [
+        800,
+        420
+      ],
+      "id": "tool-reservar-turno",
+      "name": "Tool: Reservar Turno"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign-reply",
+              "name": "reply",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-intent",
+              "name": "intent",
+              "value": "={{ $json.metadata?.intent || 'otro' }}",
+              "type": "string"
+            },
+            {
+              "id": "assign-success",
+              "name": "success",
+              "value": "={{ $json.metadata?.success !== false }}",
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        580,
+        240
+      ],
+      "id": "format-response",
+      "name": "Format Response"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.VITE_SUPABASE_URL || 'https://tu-proyecto.supabase.co' }}/rest/v1/agent_logs",
+        "sendHeaders": true,
+        "headers": {
+          "assignments": [
+            {
+              "name": "apikey",
+              "value": "={{ $env.VITE_SUPABASE_ANON_KEY || 'tu-anon-key' }}"
+            },
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.VITE_SUPABASE_ANON_KEY || 'tu-anon-key' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "assignments": [
+            {
+              "name": "session_id",
+              "value": "={{ $('Webhook Trigger').item.json.body.sessionId }}"
+            },
+            {
+              "name": "user_message",
+              "value": "={{ $('Webhook Trigger').item.json.body.message }}"
+            },
+            {
+              "name": "assistant_reply",
+              "value": "={{ $json.reply }}"
+            },
+            {
+              "name": "intent",
+              "value": "={{ $json.intent }}"
+            },
+            {
+              "name": "success",
+              "value": "={{ $json.success }}"
+            },
+            {
+              "name": "metadata",
+              "value": "={{ JSON.stringify({ source: $('Webhook Trigger').item.json.body.source }) }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        240
+      ],
+      "id": "write-agent-logs",
+      "name": "Write Agent Logs"
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "ai-agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ai-agent": {
+      "main": [
+        [
+          {
+            "node": "format-response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "openai-model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "ai-agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "chat-memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "ai-agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tool-consultar-servicios": {
+      "ai_tool": [
+        [
+          {
+            "node": "ai-agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tool-consultar-disponibilidad": {
+      "ai_tool": [
+        [
+          {
+            "node": "ai-agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "tool-reservar-turno": {
+      "ai_tool": [
+        [
+          {
+            "node": "ai-agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "format-response": {
+      "main": [
+        [
+          {
+            "node": "write-agent-logs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "write-agent-logs": {
+      "main": [
+        [
+          {
+            "node": "respond-to-webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
