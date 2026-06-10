@@ -235,12 +235,24 @@ export async function bookAppointment(payload) {
 
       // Actualizar contador de visitas e historial del cliente existente
       const nextVisits = (client.visit_count || 0) + 1;
+
+      // Combinar notas: conservar las anteriores y agregar el nuevo comentario si existe
+      let updatedNotes = client.notes || null;
+      if (notes && notes.trim()) {
+        if (updatedNotes) {
+          updatedNotes = `${updatedNotes}\n\n## Nueva consulta desde formulario\n${notes.trim()}`;
+        } else {
+          updatedNotes = notes.trim();
+        }
+      }
+
       await supabase
         .from("clients")
         .update({
           visit_count: nextVisits,
           status: "Activo",
-          last_treatment: treatmentName
+          last_treatment: treatmentName,
+          ...(updatedNotes !== null ? { notes: updatedNotes } : {})
         })
         .eq("id", client_id);
     } else {
@@ -253,7 +265,8 @@ export async function bookAppointment(payload) {
           email: customer_email || null,
           status: "Nuevo",
           visit_count: 1,
-          last_treatment: treatmentName
+          last_treatment: treatmentName,
+          notes: notes && notes.trim() ? notes.trim() : null
         })
         .select()
         .single();

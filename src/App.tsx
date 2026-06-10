@@ -399,6 +399,7 @@ function ReservaSection({ onBookAppointment, treatments }: {
   treatments: Treatment[];
 }) {
   const [form, setForm] = useState({ name: "", email: "", phone: "", treatment: "", date: "", comments: "" });
+  const [allTreatmentSlots, setAllTreatmentSlots] = useState<Appointment[]>([]);
   const [availableSlots, setAvailableSlots] = useState<Appointment[]>([]);
   const [selectedSlotId, setSelectedSlotId] = useState("");
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -407,57 +408,74 @@ function ReservaSection({ onBookAppointment, treatments }: {
   const [submitted, setSubmitted] = useState(false);
   const [solicitudes, setSolicitudes] = useState<any[]>([]);
 
-  // Buscar turnos disponibles cuando cambia el tratamiento o la fecha
+  // Fechas únicas disponibles para el tratamiento seleccionado
+  const availableDates = Array.from(new Set(allTreatmentSlots.map(s => s.date))).sort();
+
+  // Al cambiar el tratamiento, consultar todos los turnos disponibles para ese tratamiento
   useEffect(() => {
-    if (!form.treatment || !form.date) {
-      setAvailableSlots([]);
-      setSelectedSlotId("");
-      return;
-    }
+    setAllTreatmentSlots([]);
+    setAvailableSlots([]);
+    setSelectedSlotId("");
+    setForm(f => ({ ...f, date: "" }));
+
+    if (!form.treatment) return;
 
     if (!isConfigured) {
-      // Simulación local si Supabase no está configurado
+      // Fallback de demo si Supabase no está configurado
+      const today = new Date().toISOString().split("T")[0];
+      const tomorrow = new Date(Date.now() + 86400000).toISOString().split("T")[0];
       const simulatedSlots: Appointment[] = [
-        { id: "slot-1", clientId: "", clientName: "", treatmentId: "1", treatmentName: form.treatment, date: form.date, time: "10:00", professional: "Camila Fernández", status: "Disponible" as any },
-        { id: "slot-2", clientId: "", clientName: "", treatmentId: "2", treatmentName: form.treatment, date: form.date, time: "14:30", professional: "Valentina Gómez", status: "Disponible" as any },
-        { id: "slot-3", clientId: "", clientName: "", treatmentId: "3", treatmentName: form.treatment, date: form.date, time: "17:00", professional: "Florencia Medina", status: "Disponible" as any },
+        { id: "slot-1", clientId: "", clientName: "", treatmentId: "1", treatmentName: form.treatment, date: today, time: "10:00", professional: "Camila Fernández", status: "Disponible" as any },
+        { id: "slot-2", clientId: "", clientName: "", treatmentId: "2", treatmentName: form.treatment, date: today, time: "14:30", professional: "Valentina Gómez", status: "Disponible" as any },
+        { id: "slot-3", clientId: "", clientName: "", treatmentId: "3", treatmentName: form.treatment, date: tomorrow, time: "17:00", professional: "Florencia Medina", status: "Disponible" as any },
       ];
-      setAvailableSlots(simulatedSlots);
-      setSelectedSlotId("");
+      setAllTreatmentSlots(simulatedSlots);
+      const firstDate = simulatedSlots[0].date;
+      setForm(f => ({ ...f, date: firstDate }));
+      setAvailableSlots(simulatedSlots.filter(s => s.date === firstDate));
       return;
     }
 
     let active = true;
-    async function fetchSlots() {
+    async function fetchAllSlots() {
       setLoadingSlots(true);
       try {
-        const res = await getAvailableAppointments({
-          treatmentName: form.treatment,
-          date: form.date
-        });
+        const res = await getAvailableAppointments({ treatmentName: form.treatment });
         if (active) {
-          if (res.success && res.data) {
-            setAvailableSlots(res.data as Appointment[]);
+          if (res.success && res.data && res.data.length > 0) {
+            const slots = res.data as Appointment[];
+            setAllTreatmentSlots(slots);
+            const firstDate = slots[0].date;
+            setForm(f => ({ ...f, date: firstDate }));
+            setAvailableSlots(slots.filter(s => s.date === firstDate));
           } else {
+            setAllTreatmentSlots([]);
             setAvailableSlots([]);
           }
           setSelectedSlotId("");
         }
       } catch (err) {
         console.error("Error al buscar turnos:", err);
-        if (active) setAvailableSlots([]);
+        if (active) { setAllTreatmentSlots([]); setAvailableSlots([]); }
       } finally {
         if (active) setLoadingSlots(false);
       }
     }
-    fetchSlots();
+    fetchAllSlots();
     return () => { active = false; };
-  }, [form.treatment, form.date]);
+  }, [form.treatment]);
+
+  // Al cambiar la fecha, filtrar los slots disponibles para esa fecha
+  function handleDateChange(date: string) {
+    setForm(f => ({ ...f, date }));
+    setSelectedSlotId("");
+    setAvailableSlots(allTreatmentSlots.filter(s => s.date === date));
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!selectedSlotId) {
-      setBookingError("Por favor, selecciona un turno de los horarios disponibles.");
+      setBookingError("Por favor, seleccioná un turno de los horarios disponibles.");
       return;
     }
 
@@ -487,6 +505,7 @@ function ReservaSection({ onBookAppointment, treatments }: {
         setForm({ name: "", email: "", phone: "", treatment: "", date: "", comments: "" });
         setSelectedSlotId("");
         setAvailableSlots([]);
+        setAllTreatmentSlots([]);
         setSubmitted(true);
         setTimeout(() => setSubmitted(false), 5000);
       } else {
@@ -499,6 +518,13 @@ function ReservaSection({ onBookAppointment, treatments }: {
     }
   }
 
+  // Formatear fecha para mostrar al usuario (YYYY-MM-DD → DD/MM/YYYY)
+  function formatDate(dateStr: string) {
+    if (!dateStr) return "";
+    const [y, m, d] = dateStr.split("-");
+    return `${d}/${m}/${y}`;
+  }
+
   const inputCls = "w-full bg-muted border border-input rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/30 transition-all placeholder:text-muted-foreground";
 
   return (
@@ -506,7 +532,7 @@ function ReservaSection({ onBookAppointment, treatments }: {
       <div className="max-w-4xl mx-auto px-4 sm:px-6">
         <div className="text-center mb-10">
           <h2 className="font-serif text-3xl sm:text-4xl font-semibold text-foreground mb-3">Reservar turno</h2>
-          <p className="text-muted-foreground">Completá el formulario y nos comunicaremos para confirmar tu cita.</p>
+          <p className="text-muted-foreground">Elegí un tratamiento y te mostraremos la próxima disponibilidad real. La solicitud queda pendiente hasta que el equipo la confirme.</p>
         </div>
 
         <div className="bg-card border border-border rounded-2xl shadow-sm p-6 sm:p-8">
@@ -543,15 +569,41 @@ function ReservaSection({ onBookAppointment, treatments }: {
             <div>
               <label htmlFor="res-treatment" className="block text-xs font-medium text-muted-foreground mb-1.5">Tratamiento deseado *</label>
               <select id="res-treatment" data-testid="select-tratamiento" required className={inputCls}
-                value={form.treatment} onChange={e => setForm(f => ({ ...f, treatment: e.target.value }))}>
+                value={form.treatment} onChange={e => setForm(f => ({ ...f, treatment: e.target.value, date: "", comments: f.comments }))}>
                 <option value="">Seleccioná un tratamiento</option>
                 {treatments.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
               </select>
             </div>
             <div>
               <label htmlFor="res-date" className="block text-xs font-medium text-muted-foreground mb-1.5">Fecha preferida *</label>
-              <input id="res-date" type="date" data-testid="input-fecha" required className={inputCls}
-                value={form.date} onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+              {loadingSlots ? (
+                <div className="text-sm text-muted-foreground py-2.5 flex items-center gap-2">
+                  <span className="animate-spin inline-block w-3 h-3 border-2 border-primary border-t-transparent rounded-full" />
+                  <span>Buscando disponibilidad...</span>
+                </div>
+              ) : !form.treatment ? (
+                <select disabled className={inputCls + " opacity-50 cursor-not-allowed"}>
+                  <option>Primero seleccioná un tratamiento</option>
+                </select>
+              ) : availableDates.length === 0 ? (
+                <select disabled className={inputCls + " opacity-50 cursor-not-allowed"}>
+                  <option>Sin fechas disponibles</option>
+                </select>
+              ) : (
+                <>
+                  <select id="res-date" data-testid="input-fecha" required className={inputCls}
+                    value={form.date} onChange={e => handleDateChange(e.target.value)}>
+                    {availableDates.map(d => (
+                      <option key={d} value={d}>{formatDate(d)}</option>
+                    ))}
+                  </select>
+                  {form.date && (
+                    <p className="mt-1.5 text-xs text-primary font-medium">
+                      Próxima disponibilidad para {form.treatment}: {formatDate(availableDates[0])}
+                    </p>
+                  )}
+                </>
+              )}
             </div>
             <div>
               <label htmlFor="res-slot" className="block text-xs font-medium text-muted-foreground mb-1.5">Turnos disponibles *</label>
@@ -560,13 +612,17 @@ function ReservaSection({ onBookAppointment, treatments }: {
                   <span className="animate-spin inline-block w-3 h-3 border-2 border-primary border-t-transparent rounded-full" />
                   <span>Buscando turnos disponibles...</span>
                 </div>
-              ) : !form.treatment || !form.date ? (
+              ) : !form.treatment ? (
                 <div className="text-xs text-muted-foreground py-2.5 bg-muted rounded-xl px-4 border border-dashed border-border">
-                  Seleccioná tratamiento y fecha para ver horarios.
+                  Seleccioná un tratamiento para ver horarios.
+                </div>
+              ) : form.treatment && allTreatmentSlots.length === 0 && !loadingSlots ? (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5">
+                  No hay turnos disponibles para este tratamiento por el momento. Podés escribirnos por el chat para consultar otras opciones.
                 </div>
               ) : availableSlots.length === 0 ? (
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-4 py-2.5">
-                  No hay turnos disponibles para esta fecha. Elegí otro día.
+                <div className="text-xs text-muted-foreground py-2.5 bg-muted rounded-xl px-4 border border-dashed border-border">
+                  Seleccioná una fecha para ver horarios.
                 </div>
               ) : (
                 <select id="res-slot" required className={inputCls}
@@ -589,7 +645,7 @@ function ReservaSection({ onBookAppointment, treatments }: {
             <div className="sm:col-span-2">
               <button type="submit" data-testid="button-submit-reserva" disabled={bookingLoading || !selectedSlotId}
                 className="w-full bg-primary text-white font-medium py-3 rounded-xl hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-                {bookingLoading ? "Procesando solicitud..." : "Confirmar Reserva"}
+                {bookingLoading ? "Procesando solicitud..." : "Solicitar reserva"}
               </button>
             </div>
           </form>
