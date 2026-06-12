@@ -11,6 +11,7 @@ import { isConfigured } from "@/lib/supabaseClient";
 import { getAvailableAppointments } from "@/services/appointmentsApi";
 import { sendMessageToAgent } from "@/services/agentApi";
 
+
 // ─── UTILITIES ──────────────────────────────────────────────────────────────
 
 function cn(...classes: (string | false | null | undefined)[]) {
@@ -19,6 +20,47 @@ function cn(...classes: (string | false | null | undefined)[]) {
 
 function formatPrice(n: number) {
   return `$${n.toLocaleString("es-AR")}`;
+}
+
+async function notifyReservation(payload: {
+  appointment_id: string;
+  customer_name: string;
+  customer_phone: string;
+  customer_email?: string;
+  treatment: string;
+  date: string;
+  time: string;
+  professional: string;
+  price?: number | string;
+  notes?: string;
+  status: string;
+  source: string;
+}) {
+  const webhookUrl = (import.meta as any).env?.VITE_N8N_RESERVATION_WEBHOOK_URL;
+
+  if (!webhookUrl || String(webhookUrl).trim() === "") {
+    console.warn("Webhook de notificación de reserva no configurado.");
+    return { success: false };
+  }
+
+  try {
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`Error notificando reserva: ${response.status} ${response.statusText}`);
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.warn("La reserva fue registrada, pero no se pudo enviar la notificación por mail:", error);
+    return { success: false };
+  }
 }
 
 // ─── BADGE ──────────────────────────────────────────────────────────────────
@@ -473,50 +515,68 @@ function ReservaSection({ onBookAppointment, treatments }: {
   }
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!selectedSlotId) {
-      setBookingError("Por favor, seleccioná un turno de los horarios disponibles.");
-      return;
-    }
+  e.preventDefault();
 
-    setBookingLoading(true);
-    setBookingError("");
+  if (!selectedSlotId) {
+    setBookingError("Por favor, seleccioná un turno de los horarios disponibles.");
+    return;
+  }
 
-    try {
-      const res = await onBookAppointment({
+  setBookingLoading(true);
+  setBookingError("");
+
+  try {
+    const selectedSlot = availableSlots.find(s => s.id === selectedSlotId);
+
+    const res = await onBookAppointment({
+      appointment_id: selectedSlotId,
+      customer_name: form.name,
+      customer_phone: form.phone,
+      customer_email: form.email,
+      notes: form.comments
+    });
+
+    if (res.success) {
+      await notifyReservation({
         appointment_id: selectedSlotId,
         customer_name: form.name,
         customer_phone: form.phone,
-        customer_email: form.email,
-        notes: form.comments
+        customer_email: form.email || "",
+        treatment: form.treatment,
+        date: form.date,
+        time: selectedSlot ? selectedSlot.time : "",
+        professional: selectedSlot ? selectedSlot.professional : "",
+        price: selectedSlot ? (selectedSlot as any).price || "" : "",
+        notes: form.comments || "",
+        status: "Pendiente",
+        source: "formulario_web"
       });
 
-      if (res.success) {
-        const selectedSlot = availableSlots.find(s => s.id === selectedSlotId);
-        setSolicitudes(s => [
-          {
-            name: form.name,
-            treatment: form.treatment,
-            date: form.date,
-            time: selectedSlot ? selectedSlot.time : ""
-          },
-          ...s
-        ]);
-        setForm({ name: "", email: "", phone: "", treatment: "", date: "", comments: "" });
-        setSelectedSlotId("");
-        setAvailableSlots([]);
-        setAllTreatmentSlots([]);
-        setSubmitted(true);
-        setTimeout(() => setSubmitted(false), 5000);
-      } else {
-        setBookingError(res.error || "Ese turno ya no está disponible. Elegí otra opción.");
-      }
-    } catch (err: any) {
-      setBookingError(err.message || "Error al registrar la reserva.");
-    } finally {
-      setBookingLoading(false);
+      setSolicitudes(s => [
+        {
+          name: form.name,
+          treatment: form.treatment,
+          date: form.date,
+          time: selectedSlot ? selectedSlot.time : ""
+        },
+        ...s
+      ]);
+
+      setForm({ name: "", email: "", phone: "", treatment: "", date: "", comments: "" });
+      setSelectedSlotId("");
+      setAvailableSlots([]);
+      setAllTreatmentSlots([]);
+      setSubmitted(true);
+      setTimeout(() => setSubmitted(false), 5000);
+    } else {
+      setBookingError(res.error || "Ese turno ya no está disponible. Elegí otra opción.");
     }
+  } catch (err: any) {
+    setBookingError(err.message || "Error al registrar la reserva.");
+  } finally {
+    setBookingLoading(false);
   }
+}
 
   // Formatear fecha para mostrar al usuario (YYYY-MM-DD → DD/MM/YYYY)
   function formatDate(dateStr: string) {
